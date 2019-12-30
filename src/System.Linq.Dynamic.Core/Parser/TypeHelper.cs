@@ -30,13 +30,49 @@ namespace System.Linq.Dynamic.Core.Parser
             return null;
         }
 
+        private static bool HasImplicitConversion(Type baseType, Type targetType, out MethodInfo methodInfo)
+        {
+            if (baseType == null)
+            {
+                methodInfo = null;
+                return false;
+            }
+
+            methodInfo = baseType.GetMethods(BindingFlags.Public | BindingFlags.Static)
+                .Where(mi => mi.Name == "op_Implicit" && mi.ReturnType == targetType)
+                .SingleOrDefault(mi => mi.GetParameters().FirstOrDefault()?.ParameterType == baseType);
+
+            if (methodInfo != null)
+                return true;
+
+            methodInfo = targetType.GetMethods(BindingFlags.Public | BindingFlags.Static)
+               .Where(mi => mi.Name == "op_Implicit" && mi.ReturnType == targetType)
+               .SingleOrDefault(mi => mi.GetParameters().FirstOrDefault()?.ParameterType == baseType);
+
+            if (methodInfo != null)
+                return true;
+
+            return HasImplicitConversion(baseType.GetTypeInfo().BaseType, targetType, out methodInfo);
+
+
+        }
+
         public static bool IsCompatibleWith(Type source, Type target)
+        {
+            return IsCompatibleWith(source, target, out _);
+        }
+
+        public static bool IsCompatibleWith(Type source, Type target, out MethodInfo methodInfo)
         {
 #if !(NETFX_CORE || WINDOWS_APP || DOTNET5_1 || UAP10_0 || NETSTANDARD)
             if (source == target)
             {
+                methodInfo = null;
                 return true;
             }
+
+            if (HasImplicitConversion(source, target, out methodInfo))
+                return true;
 
             if (!target.IsValueType)
             {
@@ -172,8 +208,13 @@ namespace System.Linq.Dynamic.Core.Parser
 #else
             if (source == target)
             {
+                methodInfo = null;
                 return true;
             }
+
+             if (HasImplicitConversion(source, target, out methodInfo))
+                return true;
+
             if (!target.GetTypeInfo().IsValueType)
             {
                 return target.IsAssignableFrom(source);

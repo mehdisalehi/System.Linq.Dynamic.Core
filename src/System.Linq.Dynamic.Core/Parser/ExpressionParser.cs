@@ -431,6 +431,7 @@ namespace System.Linq.Dynamic.Core.Parser
         Expression ParseComparisonOperator()
         {
             Expression left = ParseShiftOperator();
+            TokenId tokenId = _textParser.CurrentToken.Id;
             while (_textParser.CurrentToken.Id == TokenId.Equal || _textParser.CurrentToken.Id == TokenId.DoubleEqual ||
                    _textParser.CurrentToken.Id == TokenId.ExclamationEqual || _textParser.CurrentToken.Id == TokenId.LessGreater ||
                    _textParser.CurrentToken.Id == TokenId.GreaterThan || _textParser.CurrentToken.Id == TokenId.GreaterThanEqual ||
@@ -441,109 +442,175 @@ namespace System.Linq.Dynamic.Core.Parser
                 Token op = _textParser.CurrentToken;
                 _textParser.NextToken();
                 Expression right = ParseShiftOperator();
-                bool isEquality = op.Id == TokenId.Equal || op.Id == TokenId.DoubleEqual || op.Id == TokenId.ExclamationEqual || op.Id == TokenId.LessGreater;
-
-                if (isEquality && (!left.Type.GetTypeInfo().IsValueType && !right.Type.GetTypeInfo().IsValueType || left.Type == typeof(Guid) && right.Type == typeof(Guid)))
+                //bool isEquality = op.Id == TokenId.Equal || op.Id == TokenId.DoubleEqual || op.Id == TokenId.ExclamationEqual || op.Id == TokenId.LessGreater;
+                if (!(Constants.IsNull(left) || Constants.IsNull(right)))
                 {
-                    // If left or right is NullLiteral, just continue. Else check if the types differ.
-                    if (!(Constants.IsNull(left) || Constants.IsNull(right)) && left.Type != right.Type)
+                    Expression[] args = new Expression[] { left, right };
+                    int nResult = _methodFinder.FindOperator(new Type[] { left.Type, right.Type }, GetOverloadedOperationName(tokenId), args, out MethodBase methodBase);
+                    switch (nResult)
                     {
-                        if (left.Type.IsAssignableFrom(right.Type) || HasImplicitConversion(right.Type, left.Type))
-                        {
-                            right = Expression.Convert(right, left.Type);
-                        }
-                        else if (right.Type.IsAssignableFrom(left.Type) || HasImplicitConversion(left.Type, right.Type))
-                        {
-                            left = Expression.Convert(left, right.Type);
-                        }
-                        else
-                        {
-                            throw IncompatibleOperandsError(op.Text, left, right, op.Pos);
-                        }
+                        case 0:
+                            if (TypeHelper.IsEnumType(left.Type) || TypeHelper.IsEnumType(right.Type))
+                            {
+                                if (left.Type != right.Type)
+                                {
+                                    Expression e;
+                                    if ((e = _parsingConfig.ExpressionPromoter.Promote(right, left.Type, true, false)) != null)
+                                    {
+                                        right = e;
+                                    }
+                                    else if ((e = _parsingConfig.ExpressionPromoter.Promote(left, right.Type, true, false)) != null)
+                                    {
+                                        left = e;
+                                    }
+                                    else if (TypeHelper.IsEnumType(left.Type) && (constantExpr = right as ConstantExpression) != null)
+                                    {
+                                        right = ParseEnumToConstantExpression(op.Pos, left.Type, constantExpr);
+                                    }
+                                    else if (TypeHelper.IsEnumType(right.Type) && (constantExpr = left as ConstantExpression) != null)
+                                    {
+                                        left = ParseEnumToConstantExpression(op.Pos, right.Type, constantExpr);
+                                    }
+                                    else
+                                    {
+                                        throw IncompatibleOperandsError(op.Text, left, right, op.Pos);
+                                    }
+                                }
+                            }
+                            else if ((constantExpr = right as ConstantExpression) != null && constantExpr.Value is string stringValueR && (typeConverter = _typeConverterFactory.GetConverter(left.Type)) != null)
+                            {
+                                right = Expression.Constant(typeConverter.ConvertFromInvariantString(stringValueR), left.Type);
+                            }
+                            else if ((constantExpr = left as ConstantExpression) != null && constantExpr.Value is string stringValueL && (typeConverter = _typeConverterFactory.GetConverter(right.Type)) != null)
+                            {
+                                left = Expression.Constant(typeConverter.ConvertFromInvariantString(stringValueL), right.Type);
+                            }
+                            else
+                            {
+                                throw IncompatibleOperandsError(op.Text, left, right, op.Pos);
+                            }
+                            break;
+                        case 1:
+                            left = args[0];
+                            right = args[1];
+                            break;
+                        default:
+                            throw ParseError(_textParser.CurrentToken.Pos, Res.AmbiguousOperatorInvocation, GetOverloadedOperationName(tokenId), left.Type, right.Type);
                     }
-                }
-                else if (TypeHelper.IsEnumType(left.Type) || TypeHelper.IsEnumType(right.Type))
-                {
-                    if (left.Type != right.Type)
-                    {
-                        Expression e;
-                        if ((e = _parsingConfig.ExpressionPromoter.Promote(right, left.Type, true, false)) != null)
-                        {
-                            right = e;
-                        }
-                        else if ((e = _parsingConfig.ExpressionPromoter.Promote(left, right.Type, true, false)) != null)
-                        {
-                            left = e;
-                        }
-                        else if (TypeHelper.IsEnumType(left.Type) && (constantExpr = right as ConstantExpression) != null)
-                        {
-                            right = ParseEnumToConstantExpression(op.Pos, left.Type, constantExpr);
-                        }
-                        else if (TypeHelper.IsEnumType(right.Type) && (constantExpr = left as ConstantExpression) != null)
-                        {
-                            left = ParseEnumToConstantExpression(op.Pos, right.Type, constantExpr);
-                        }
-                        else
-                        {
-                            throw IncompatibleOperandsError(op.Text, left, right, op.Pos);
-                        }
-                    }
-                }
-                else if ((constantExpr = right as ConstantExpression) != null && constantExpr.Value is string stringValueR && (typeConverter = _typeConverterFactory.GetConverter(left.Type)) != null)
-                {
-                    right = Expression.Constant(typeConverter.ConvertFromInvariantString(stringValueR), left.Type);
-                }
-                else if ((constantExpr = left as ConstantExpression) != null && constantExpr.Value is string stringValueL && (typeConverter = _typeConverterFactory.GetConverter(right.Type)) != null)
-                {
-                    left = Expression.Constant(typeConverter.ConvertFromInvariantString(stringValueL), right.Type);
                 }
                 else
                 {
-                    bool typesAreSameAndImplementCorrectInterface = false;
-                    if (left.Type == right.Type)
+                    if(left.Type.GetTypeInfo().IsValueType)
                     {
-                        var interfaces = left.Type.GetInterfaces().Where(x => x.GetTypeInfo().IsGenericType);
-                        if (isEquality)
-                        {
-                            typesAreSameAndImplementCorrectInterface = interfaces.Any(x => x.GetGenericTypeDefinition() == typeof(IEquatable<>));
-                        }
-                        else
-                        {
-                            typesAreSameAndImplementCorrectInterface = interfaces.Any(x => x.GetGenericTypeDefinition() == typeof(IComparable<>));
-                        }
+                        left = Expression.Convert(left, TypeHelper.ToNullableType(left.Type));
                     }
-
-
-                    if (!typesAreSameAndImplementCorrectInterface)
+                    if (right.Type.GetTypeInfo().IsValueType)
                     {
-                        if (left.Type.GetTypeInfo().IsClass && right is ConstantExpression)
-                        {
-                            if (HasImplicitConversion(left.Type, right.Type))
-                            {
-                                left = Expression.Convert(left, right.Type);
-                            }
-                            else if (HasImplicitConversion(right.Type, left.Type))
-                            {
-                                right = Expression.Convert(right, left.Type);
-                            }
-                        }
-                        else if (right.Type.GetTypeInfo().IsClass && left is ConstantExpression)
-                        {
-                            if (HasImplicitConversion(right.Type, left.Type))
-                            {
-                                right = Expression.Convert(right, left.Type);
-                            }
-                            else if (HasImplicitConversion(left.Type, right.Type))
-                            {
-                                left = Expression.Convert(left, right.Type);
-                            }
-                        }
-                        else
-                        {
-                            CheckAndPromoteOperands(isEquality ? typeof(IEqualitySignatures) : typeof(IRelationalSignatures), op.Id, op.Text, ref left, ref right, op.Pos);
-                        }
+                        right = Expression.Convert(right, TypeHelper.ToNullableType(right.Type));
                     }
                 }
+
+                //if (isEquality && (!left.Type.GetTypeInfo().IsValueType && !right.Type.GetTypeInfo().IsValueType || left.Type == typeof(Guid) && right.Type == typeof(Guid)))
+                //{
+                //    // If left or right is NullLiteral, just continue. Else check if the types differ.
+                //    if (!(Constants.IsNull(left) || Constants.IsNull(right)) && left.Type != right.Type)
+                //    {
+                //        if (left.Type.IsAssignableFrom(right.Type) || HasImplicitConversion(right.Type, left.Type))
+                //        {
+                //            right = Expression.Convert(right, left.Type);
+                //        }
+                //        else if (right.Type.IsAssignableFrom(left.Type) || HasImplicitConversion(left.Type, right.Type))
+                //        {
+                //            left = Expression.Convert(left, right.Type);
+                //        }
+                //        else
+                //        {
+                //            throw IncompatibleOperandsError(op.Text, left, right, op.Pos);
+                //        }
+                //    }
+                //}
+                //else if (TypeHelper.IsEnumType(left.Type) || TypeHelper.IsEnumType(right.Type))
+                //{
+                //    if (left.Type != right.Type)
+                //    {
+                //        Expression e;
+                //        if ((e = _parsingConfig.ExpressionPromoter.Promote(right, left.Type, true, false)) != null)
+                //        {
+                //            right = e;
+                //        }
+                //        else if ((e = _parsingConfig.ExpressionPromoter.Promote(left, right.Type, true, false)) != null)
+                //        {
+                //            left = e;
+                //        }
+                //        else if (TypeHelper.IsEnumType(left.Type) && (constantExpr = right as ConstantExpression) != null)
+                //        {
+                //            right = ParseEnumToConstantExpression(op.Pos, left.Type, constantExpr);
+                //        }
+                //        else if (TypeHelper.IsEnumType(right.Type) && (constantExpr = left as ConstantExpression) != null)
+                //        {
+                //            left = ParseEnumToConstantExpression(op.Pos, right.Type, constantExpr);
+                //        }
+                //        else
+                //        {
+                //            throw IncompatibleOperandsError(op.Text, left, right, op.Pos);
+                //        }
+                //    }
+                //}
+                //else if ((constantExpr = right as ConstantExpression) != null && constantExpr.Value is string stringValueR && (typeConverter = _typeConverterFactory.GetConverter(left.Type)) != null)
+                //{
+                //    right = Expression.Constant(typeConverter.ConvertFromInvariantString(stringValueR), left.Type);
+                //}
+                //else if ((constantExpr = left as ConstantExpression) != null && constantExpr.Value is string stringValueL && (typeConverter = _typeConverterFactory.GetConverter(right.Type)) != null)
+                //{
+                //    left = Expression.Constant(typeConverter.ConvertFromInvariantString(stringValueL), right.Type);
+                //}
+                //else
+                //{
+                //    bool typesAreSameAndImplementCorrectInterface = false;
+                //    if (left.Type == right.Type)
+                //    {
+                //        var interfaces = left.Type.GetInterfaces().Where(x => x.GetTypeInfo().IsGenericType);
+                //        if (isEquality)
+                //        {
+                //            typesAreSameAndImplementCorrectInterface = interfaces.Any(x => x.GetGenericTypeDefinition() == typeof(IEquatable<>));
+                //        }
+                //        else
+                //        {
+                //            typesAreSameAndImplementCorrectInterface = interfaces.Any(x => x.GetGenericTypeDefinition() == typeof(IComparable<>));
+                //        }
+                //    }
+
+
+                //    if (!typesAreSameAndImplementCorrectInterface)
+                //    {
+                //        if (left.Type.GetTypeInfo().IsClass && right is ConstantExpression)
+                //        {
+                //            if (HasImplicitConversion(left.Type, right.Type))
+                //            {
+                //                left = Expression.Convert(left, right.Type);
+                //            }
+                //            else if (HasImplicitConversion(right.Type, left.Type))
+                //            {
+                //                right = Expression.Convert(right, left.Type);
+                //            }
+                //        }
+                //        else if (right.Type.GetTypeInfo().IsClass && left is ConstantExpression)
+                //        {
+                //            if (HasImplicitConversion(right.Type, left.Type))
+                //            {
+                //                right = Expression.Convert(right, left.Type);
+                //            }
+                //            else if (HasImplicitConversion(left.Type, right.Type))
+                //            {
+                //                left = Expression.Convert(left, right.Type);
+                //            }
+                //        }
+                //        else
+                //        {
+                //            CheckAndPromoteOperands(isEquality ? typeof(IEqualitySignatures) : typeof(IRelationalSignatures), op.Id, op.Text, ref left, ref right, op.Pos);
+                //        }
+                //    }
+                //}
 
                 switch (op.Id)
                 {
@@ -1943,8 +2010,17 @@ namespace System.Linq.Dynamic.Core.Parser
                 case TokenId.DoubleEqual:
                 case TokenId.Equal:
                     return "op_Equality";
+                case TokenId.LessGreater:
                 case TokenId.ExclamationEqual:
                     return "op_Inequality";
+                case TokenId.GreaterThan:
+                    return "op_GreaterThan";
+                case TokenId.GreaterThanEqual:
+                    return "op_GreaterThanOrEqual";
+                case TokenId.LessThan:
+                    return "op_LessThan";
+                case TokenId.LessThanEqual:
+                    return "op_LessThanOrEqual";
                 default:
                     return null;
             }

@@ -86,11 +86,14 @@ namespace System.Linq.Dynamic.Core.Parser
                 }
             }
 
-            if (TypeHelper.IsCompatibleWith(expr.Type, type))
+            if (TypeHelper.IsCompatibleWith(expr.Type, type, out MethodInfo methodInfo))
             {
-                if (type.GetTypeInfo().IsValueType || exact || expr.Type.GetTypeInfo().IsValueType && convertExpr)
+                if (type.GetTypeInfo().IsValueType || exact || methodInfo != null || expr.Type.GetTypeInfo().IsValueType && convertExpr)
                 {
-                    return Expression.Convert(expr, type);
+                    if (methodInfo != null)
+                        return Expression.Convert(expr, type, methodInfo);
+                    else
+                        return Expression.Convert(expr, type);
                 }
 
                 return expr;

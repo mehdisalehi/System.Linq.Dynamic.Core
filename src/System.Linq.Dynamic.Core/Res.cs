@@ -5,6 +5,7 @@
         public const string AmbiguousConstructorInvocation = "Ambiguous invocation of '{0}' constructor";
         public const string AmbiguousIndexerInvocation = "Ambiguous invocation of indexer in type '{0}'";
         public const string AmbiguousMethodInvocation = "Ambiguous invocation of method '{0}' in type '{1}'";
+        public const string AmbiguousOperatorInvocation = "Ambiguous invocation of operator '{0}' on type '{1}' and '{2}'";
         public const string ArgsIncompatibleWithLambda = "Argument list incompatible with lambda expression";
         public const string BothTypesConvertToOther = "Both of the types '{0}' and '{1}' convert to the other";
         public const string CannotConvertValue = "A value of type '{0}' cannot be converted to type '{1}'";

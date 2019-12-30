@@ -1,10 +1,15 @@
 ﻿using System.Collections.Generic;
+using System.Linq.Dynamic.Core.Parser.SupportedOperands;
 using System.Linq.Expressions;
 using System.Reflection;
 
 namespace System.Linq.Dynamic.Core.Parser.SupportedMethods
 {
-    internal class MethodFinder
+    public interface IBinaryOperatorDumy<T>
+    {
+        bool F(T op1, T op2);
+    }
+    public class MethodFinder
     {
         private readonly ParsingConfig _parsingConfig;
 
@@ -82,6 +87,73 @@ namespace System.Linq.Dynamic.Core.Parser.SupportedMethods
             }
 
             return applicable.Length;
+        }
+
+        public int FindOperator(Type[] types, string operatorName, Expression[] args, out MethodBase method)
+        {
+            HashSet<Type> _types = new HashSet<Type>(types);
+            HashSet<Type> _ImplicitTypes = new HashSet<Type>();
+            BindingFlags flags = BindingFlags.Public | BindingFlags.DeclaredOnly | BindingFlags.Static;
+            while (_types.Any())
+            {
+                var membersArray = _types.Select(
+                    x =>
+                    {
+                        if (!x.GetTypeInfo().IsPrimitive && !TypeHelper.IsNullableType(x))
+                        {
+                            return x.FindMembers(MemberTypes.Method, flags, Type.FilterNameIgnoreCase, operatorName);
+                        }
+                        else
+                        {
+                            List<Type> signatures = new List<Type>() { typeof(IBinaryOperatorDumy<>).MakeGenericType(x) };
+
+                            //List<Type> signatures = new List<Type>(){ typeof(IEqualitySignatures), typeof(IRelationalSignatures), typeof(IArithmeticSignatures) };
+                            return signatures.SelectMany(y => y.FindMembers(MemberTypes.Method, BindingFlags.Public | BindingFlags.Instance | BindingFlags.DeclaredOnly, Type.FilterNameIgnoreCase, "F"));
+                        }
+                    });
+                MemberInfo[] members = membersArray.SelectMany(x => x).Distinct().ToArray();
+                int count = FindBestMethod(members.Cast<MethodBase>(), args, out method);
+                if (count != 0)
+                {
+                    return count;
+                }
+
+                foreach (var item in _types.SelectMany(x => AvailableImplicitCastHavingParameter(x, x)))
+                {
+                    _ImplicitTypes.Add(item);
+                }
+                _types = new HashSet<Type>(_types.Select(x => x.BaseType).Where(x => x != null));
+            }
+
+            var implicitMembersArray = _ImplicitTypes.Select(
+                    x =>
+                    {
+                        if (!x.GetTypeInfo().IsPrimitive && !TypeHelper.IsNullableType(x))
+                        {
+                            return x.FindMembers(MemberTypes.Method, flags, Type.FilterNameIgnoreCase, operatorName);
+                        }
+                        else
+                        {
+                            List<Type> signatures = new List<Type>() { typeof(IBinaryOperatorDumy<>).MakeGenericType(x) };
+                            return signatures.SelectMany(y => y.FindMembers(MemberTypes.Method, BindingFlags.Public | BindingFlags.Instance | BindingFlags.DeclaredOnly, Type.FilterNameIgnoreCase, "F"));
+                        }
+                    });
+            MemberInfo[] implicitMembers = implicitMembersArray.SelectMany(x => x).Distinct().ToArray();
+            int implicitCount = FindBestMethod(implicitMembers.Cast<MethodBase>(), args, out method);
+            if (implicitCount != 0)
+            {
+                return implicitCount;
+            }
+
+            method = null;
+            return 0;
+        }
+
+        public static Type[] AvailableImplicitCastHavingParameter(Type definedOn, Type parameterType)
+        {
+            return definedOn.GetMethods(BindingFlags.Public | BindingFlags.Static)
+                .Where(mi => (mi.Name == "op_Implicit") && mi.GetParameters().FirstOrDefault()?.ParameterType == parameterType)
+                .Select(mi => mi.ReturnType).ToArray();
         }
 
         public int FindIndexer(Type type, Expression[] args, out MethodBase method)
